@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PID Elevator Controller — Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-deep:     #e6dec5;   /* warm cream paper */
+  --bg-panel:    #f3edd7;   /* slightly lighter parchment */
+  --bg-inset:    #fdf9ea;   /* palest cream for canvas insets */
+  --border:      #c5b993;   /* tan border */
+  --border-hi:   #9a8e68;   /* darker tan */
+  --text:        #1d2538;   /* dark navy ink */
+  --text-dim:    #5a5246;   /* warm brown-grey */
+  --text-faint:  #8a8270;   /* faded ink */
+
+  --pos:    #1f7a14;   /* position trace, dark forest green */
+  --set:    #0e5a85;   /* setpoint, deep teal */
+  --p:      #a55c0a;   /* P term, burnt orange */
+  --i:      #98135e;   /* I term, deep rose */
+  --d:      #4731a0;   /* D term, deep indigo */
+  --motor:  #1d2538;   /* motor force, dark navy */
+  --warn:   #a01e2e;   /* warning, dark red */
+
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  height: 100vh;
+  margin: 0;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  /* warm halo + faint graph-paper grid */
+  background-image:
+    radial-gradient(ellipse at top, rgba(150,110,50,0.08), transparent 60%),
+    linear-gradient(rgba(50,40,20,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(50,40,20,0.04) 1px, transparent 1px);
+  background-size: auto, 24px 24px, 24px 24px;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+::selection { background: var(--pos); color: #fff; }
+
+/* HEADER ------------------------------------------------ */
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(150,110,50,0.10), transparent);
+}
+.logo { display: flex; align-items: baseline; gap: 12px; font-weight: 700; letter-spacing: 0.18em; font-size: 13px; }
+.logo .tick { color: var(--pos); animation: pulse 2s infinite; }
+.logo .ver  { color: var(--text-faint); font-weight: 400; font-size: 10px; letter-spacing: 0.2em; }
+.logo .sub  { color: var(--text-dim); font-weight: 400; font-size: 10px; letter-spacing: 0.2em; margin-left: 8px; padding-left: 12px; border-left: 1px solid var(--border); }
+
+.status { display: flex; align-items: center; gap: 14px; }
+.status .ind { color: var(--pos); font-size: 10px; letter-spacing: 0.18em; }
+.status .ind.paused { color: var(--warn); }
+.status button {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.status button:hover { color: var(--text); border-color: var(--border-hi); background: var(--bg-panel); }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* LAYOUT ------------------------------------------------ */
+main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 14px;
+  max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1;
+  min-height: 0;            /* allow children to constrain */
+  overflow: hidden;
+  box-sizing: border-box;
+}
+@media (max-width: 700px) {
+  main { grid-template-columns: 1fr; }
+}
+
+.col-controls, .col-display {
+  display: flex; flex-direction: column; gap: 14px;
+  min-height: 0;
+}
+.col-controls { overflow-y: auto; }
+.col-display { overflow: hidden; }
+
+/* Two panels side-by-side inside a column */
+.panel-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+/* RIGHT COLUMN: single elevator panel that fills the column height */
+.col-display { align-items: stretch; }
+.col-display .panel.elevator-panel {
+  flex: 1;                    /* fill full column height */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.col-display .panel.elevator-panel canvas {
+  flex: 1 1 0;
+  min-height: 0;
+  display: block;
+  width: 100%;
+}
+.elevator-panel { /* full-height shaft */ }
+
+/* PANEL ------------------------------------------------- */
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  position: relative;
+}
+.panel::before {
+  content: "";
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-hi), transparent);
+}
+.panel h2 {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  font-weight: 500;
+  color: var(--text-dim);
+  padding: 6px 14px 5px;
+  border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.panel h2 .meta { color: var(--text-faint); font-size: 9px; }
+.panel-body { padding: 10px 14px; }
+.panel-body.tight { padding: 7px 12px; }
+
+/* ELEVATOR CANVAS --------------------------------------- */
+#shaft {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--bg-inset);
+}
+
+/* READOUTS ---------------------------------------------- */
+.readout {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 11px;
+}
+.readout:last-child { border-bottom: none; }
+.readout .lbl { color: var(--text-dim); font-size: 9px; letter-spacing: 0.18em; }
+.readout .val { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 500; }
+.readout .val.pos-c { color: var(--pos); }
+.readout .val.set-c { color: var(--set); }
+.readout .val.warn  { color: var(--warn); }
+
+/* PID TERM BARS ----------------------------------------- */
+.term-row { margin-bottom: 5px; }
+.term-row:last-child { margin-bottom: 0; }
+.term-row .head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 2px;
+  font-size: 10px;
+}
+.term-row .head .name { letter-spacing: 0.18em; font-weight: 600; }
+.term-row .head .val { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.bar-track {
+  height: 4px; background: var(--bg-inset);
+  position: relative;
+  border: 1px solid var(--border);
+}
+.bar-track .center {
+  position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px;
+  background: var(--border-hi);
+}
+.bar-fill {
+  position: absolute; top: 0; bottom: 0;
+  transition: none;
+}
+.term-p .name, .term-p .val.live { color: var(--p); }
+.term-i .name, .term-i .val.live { color: var(--i); }
+.term-d .name, .term-d .val.live { color: var(--d); }
+.term-m .name, .term-m .val.live { color: var(--motor); }
+.term-p .bar-fill { background: var(--p); }
+.term-i .bar-fill { background: var(--i); }
+.term-d .bar-fill { background: var(--d); }
+.term-m .bar-fill { background: var(--motor); }
+
+/* FLOOR BUTTONS ----------------------------------------- */
+.floor-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+.floor-btn {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.12s;
+  letter-spacing: 0.05em;
+}
+.floor-btn:hover { color: var(--text); border-color: var(--border-hi); }
+.floor-btn.active {
+  background: var(--set);
+  color: #fff;
+  border-color: var(--set);
+  box-shadow: 0 0 12px rgba(14,90,133,0.25);
+}
+
+/* PAX ROW ----------------------------------------------- */
+.pax-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.pax-btn {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  width: 32px;
+  height: 26px;
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.pax-btn:hover:not(:disabled) { color: var(--text); border-color: var(--border-hi); }
+.pax-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pax-count {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 90px;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+.pax-count .pax-label { color: var(--text-faint); font-weight: 500; margin-left: 4px; }
+
+/* SLIDERS ----------------------------------------------- */
+.slider-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 70px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.slider-row:last-child { margin-bottom: 0; }
+.slider-row > .lbl {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+.slider-row > .val {
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.slider-row.tp > .lbl, .slider-row.tp > .val { color: var(--p); }
+.slider-row.ti > .lbl, .slider-row.ti > .val { color: var(--i); }
+.slider-row.td > .lbl, .slider-row.td > .val { color: var(--d); }
+
+input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 4px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  outline: none;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  background: var(--text);
+  border: 2px solid var(--bg-deep);
+  cursor: pointer;
+  transition: all 0.1s;
+}
+input[type=range]::-moz-range-thumb {
+  width: 14px; height: 14px;
+  background: var(--text);
+  border: 2px solid var(--bg-deep);
+  cursor: pointer;
+}
+.slider-row.tp input[type=range]::-webkit-slider-thumb { background: var(--p); }
+.slider-row.ti input[type=range]::-webkit-slider-thumb { background: var(--i); }
+.slider-row.td input[type=range]::-webkit-slider-thumb { background: var(--d); }
+.slider-row.tp input[type=range]::-moz-range-thumb { background: var(--p); }
+.slider-row.ti input[type=range]::-moz-range-thumb { background: var(--i); }
+.slider-row.td input[type=range]::-moz-range-thumb { background: var(--d); }
+
+/* PRESETS ----------------------------------------------- */
+.preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.preset-btn {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 9px 6px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: all 0.12s;
+  text-align: left;
+}
+.preset-btn:hover { color: var(--text); border-color: var(--border-hi); background: var(--bg-panel); }
+.preset-btn .num { color: var(--text-faint); margin-right: 6px; }
+
+/* CHARTS ------------------------------------------------ */
+.col-controls .panel.chart-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.col-controls .panel.chart-panel canvas {
+  flex: 1 1 0;
+  min-height: 80px;
+  width: 100%;
+  display: block;
+  background: var(--bg-inset);
+}
+.chart-tabs { display: flex; gap: 4px; }
+.chart-tabs .tab {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.12s;
+}
+.chart-tabs .tab.active {
+  background: var(--text);
+  color: var(--bg-inset);
+  border-color: var(--text);
+}
+.chart-tabs .tab:hover:not(.active) { color: var(--text); border-color: var(--border-hi); }
+
+.chart-legend {
+  display: flex; gap: 16px; padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  color: var(--text-dim);
+}
+.chart-panel[data-view="pos"] .chart-legend-pid { display: none; }
+.chart-panel[data-view="pid"] .chart-legend-pos { display: none; }
+.chart-legend .item { display: flex; align-items: center; gap: 6px; }
+.chart-legend .swatch { width: 10px; height: 2px; }
+.chart-legend .swatch.pos { background: var(--pos); }
+.chart-legend .swatch.set { background: var(--set); border-top: 1px dashed var(--set); height: 0; border-bottom: 1px dashed var(--set); }
+.chart-legend .swatch.p   { background: var(--p); }
+.chart-legend .swatch.i   { background: var(--i); }
+.chart-legend .swatch.d   { background: var(--d); }
+.chart-legend .swatch.m   { background: var(--motor); }
+
+/* FOOTER NOTE ------------------------------------------- */
+.note {
+  padding: 10px 14px;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.55;
+  letter-spacing: 0.04em;
+}
+.note strong { color: var(--text-dim); font-weight: 500; }
+
+/* CHIP -------------------------------------------------- */
+.chip {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.chip.on { color: var(--pos); border-color: var(--pos); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <span class="tick">▮</span> PID·ELEVATOR·CTRL
+    <span class="ver">v1.0</span>
+    <span class="sub">CLOSED·LOOP·POSITION</span>
+  </div>
+  <div class="status">
+    <span class="ind" id="status-indicator">● RUNNING</span>
+    <button id="btn-pause">PAUSE</button>
+    <button id="btn-reset">RESET</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- LEFT: ALL CONTROLS -->
+  <section class="col-controls">
+    <div class="panel">
+      <h2>PID·GAINS</h2>
+      <div class="panel-body tight">
+        <div class="slider-row tp">
+          <span class="lbl">K<sub>p</sub> PROP</span>
+          <input type="range" id="s-kp" min="0" max="25000" value="5000" step="100">
+          <span class="val" id="v-kp">5000</span>
+        </div>
+        <div class="slider-row ti">
+          <span class="lbl">K<sub>i</sub> INT</span>
+          <input type="range" id="s-ki" min="0" max="5000" value="800" step="20">
+          <span class="val" id="v-ki">800</span>
+        </div>
+        <div class="slider-row td">
+          <span class="lbl">K<sub>d</sub> DERIV</span>
+          <input type="range" id="s-kd" min="0" max="15000" value="4000" step="50">
+          <span class="val" id="v-kd">4000</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>PHYSICS</h2>
+      <div class="panel-body tight">
+        <div class="slider-row">
+          <span class="lbl">MASS</span>
+          <input type="range" id="s-mass" min="200" max="2500" value="800" step="50">
+          <span class="val" id="v-mass">800 kg</span>
+        </div>
+        <div class="slider-row">
+          <span class="lbl">MOTOR LIM</span>
+          <input type="range" id="s-mmax" min="5000" max="60000" value="20000" step="500">
+          <span class="val" id="v-mmax">20000 N</span>
+        </div>
+        <div class="slider-row">
+          <span class="lbl">FRICTION</span>
+          <input type="range" id="s-fric" min="0" max="400" value="80" step="5">
+          <span class="val" id="v-fric">80 N·s/m</span>
+        </div>
+        <div class="slider-row">
+          <span class="lbl">GRAVITY</span>
+          <input type="range" id="s-g" min="0" max="20" value="9.81" step="0.01">
+          <span class="val" id="v-g">9.81 m/s²</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-pair">
+      <div class="panel">
+        <h2>STATE</h2>
+        <div class="panel-body tight">
+          <div class="readout"><span class="lbl">POSITION</span><span class="val pos-c" id="r-position">0.00 m</span></div>
+          <div class="readout"><span class="lbl">FLOOR</span><span class="val" id="r-floor">0.00</span></div>
+          <div class="readout"><span class="lbl">TARGET</span><span class="val set-c" id="r-target">0.00 m</span></div>
+          <div class="readout"><span class="lbl">VELOCITY</span><span class="val" id="r-velocity">0.00 m/s</span></div>
+          <div class="readout"><span class="lbl">ERROR</span><span class="val" id="r-error">0.00 m</span></div>
+          <div class="readout"><span class="lbl">MOTOR</span><span class="val" id="r-motor">0 N</span></div>
+          <div class="readout"><span class="lbl">LOAD</span><span class="val" id="r-load">+0 kg</span></div>
+          <div class="readout"><span class="lbl">SETTLED</span><span class="val" id="r-settled">—</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>CONTROL·SIGNAL</h2>
+        <div class="panel-body tight">
+          <div class="term-row term-p">
+            <div class="head"><span class="name">P</span><span class="val live" id="t-p">0 N</span></div>
+            <div class="bar-track"><span class="center"></span><div class="bar-fill" id="b-p"></div></div>
+          </div>
+          <div class="term-row term-i">
+            <div class="head"><span class="name">I</span><span class="val live" id="t-i">0 N</span></div>
+            <div class="bar-track"><span class="center"></span><div class="bar-fill" id="b-i"></div></div>
+          </div>
+          <div class="term-row term-d">
+            <div class="head"><span class="name">D</span><span class="val live" id="t-d">0 N</span></div>
+            <div class="bar-track"><span class="center"></span><div class="bar-fill" id="b-d"></div></div>
+          </div>
+          <div class="term-row term-m">
+            <div class="head"><span class="name">Σ MOTOR</span><span class="val live" id="t-m">0 N</span></div>
+            <div class="bar-track"><span class="center"></span><div class="bar-fill" id="b-m"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel chart-panel" data-view="pos">
+      <h2>
+        <span class="chart-tabs">
+          <button class="tab active" data-view="pos">POSITION</button>
+          <button class="tab" data-view="pid">CONTROL</button>
+        </span>
+        <span class="meta" id="chart-meta">10s window · m</span>
+      </h2>
+      <canvas id="chart-main" width="1600" height="480"></canvas>
+      <div class="chart-legend chart-legend-pos">
+        <div class="item"><span class="swatch pos"></span>POSITION</div>
+        <div class="item"><span class="swatch set"></span>SETPOINT</div>
+      </div>
+      <div class="chart-legend chart-legend-pid">
+        <div class="item"><span class="swatch p"></span>P-TERM</div>
+        <div class="item"><span class="swatch i"></span>I-TERM</div>
+        <div class="item"><span class="swatch d"></span>D-TERM</div>
+        <div class="item"><span class="swatch m"></span>Σ MOTOR</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: ELEVATOR SHAFT (single tall panel) -->
+  <section class="col-display">
+    <div class="panel">
+      <h2>TARGET·FLOOR</h2>
+      <div class="panel-body tight">
+        <div class="floor-grid">
+          <button class="floor-btn" data-floor="0">0</button>
+          <button class="floor-btn" data-floor="1">1</button>
+          <button class="floor-btn" data-floor="2">2</button>
+          <button class="floor-btn" data-floor="3">3</button>
+          <button class="floor-btn" data-floor="4">4</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>PASSENGERS</h2>
+      <div class="panel-body tight">
+        <div class="pax-row">
+          <button class="pax-btn" id="pax-minus" aria-label="Remove passenger">−</button>
+          <span class="pax-count"><span id="pax-count">2</span><span class="pax-label">aboard</span></span>
+          <button class="pax-btn" id="pax-plus" aria-label="Add passenger">+</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel elevator-panel">
+      <h2>ELEVATOR·SHAFT <span class="meta" id="meta-clock">t=0.00s</span></h2>
+      <canvas id="shaft" width="560" height="900"></canvas>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ─── CONSTANTS ────────────────────────────────────────────────────────────
+const FLOOR_SPACING = 3.0;       // meters between floors
+const NUM_FLOORS    = 5;         // floors 0..4
+const MAX_HEIGHT    = (NUM_FLOORS - 1) * FLOOR_SPACING; // 12 m
+const PHYS_DT       = 0.005;     // 200 Hz physics step
+const HISTORY_SEC   = 10;        // chart window in seconds
+const SETTLE_TOL    = 0.05;      // m, settled threshold
+const SETTLE_VEL    = 0.05;      // m/s
+const SETTLE_TIME   = 0.5;       // sec dwell needed to declare settled
+
+// Car visual dimensions — set dynamically at init based on canvas height
+let CAR_W_PX = 240;
+let CAR_H_PX = 240;
+const CAR_INTERIOR_PAD = 4;
+let CAR_INTERIOR_W   = CAR_W_PX - 2 * CAR_INTERIOR_PAD;
+let CAR_INTERIOR_H   = CAR_H_PX - 2 * CAR_INTERIOR_PAD;
+
+// World-frame coordinate parameters (set dynamically at init)
+// Ragdoll points live in canvas pixel space:
+//   x: canvas x coordinate
+//   y: pixels measured UPWARD from the bottom of the shaft (world y=0 = floor 0 line)
+let WORLD_PX_PER_M       = 90;
+let CAR_LEFT_WORLD_X     = 0;   // car's left wall x in canvas
+let CAR_RIGHT_WORLD_X    = 0;
+let CAR_INTERIOR_LEFT_X  = 0;
+let CAR_INTERIOR_RIGHT_X = 0;
+
+// Ragdoll — scale set dynamically at init
+const RAGDOLL_DAMPING        = 0.994;
+const RAGDOLL_ITERS          = 6;
+let   RAGDOLL_SCALE          = 2.0;
+let   HEAD_R                 = 10;
+let   LIMB_R                 = 3.5;
+
+function configureForCanvasHeight(ch, cw) {
+  // Y axis maps MAX_HEIGHT + 3m headroom over the available canvas
+  const usableH = ch - 48;
+  WORLD_PX_PER_M = usableH / (MAX_HEIGHT + 3);
+  // Cabin = 2.5m visually (smaller than 3m floor spacing so it sits between floors)
+  CAR_H_PX = WORLD_PX_PER_M * 2.5;
+  CAR_W_PX = CAR_H_PX;
+  CAR_INTERIOR_W = CAR_W_PX - 2 * CAR_INTERIOR_PAD;
+  CAR_INTERIOR_H = CAR_H_PX - 2 * CAR_INTERIOR_PAD;
+  // Car horizontal placement: centered in canvas
+  const carCX = cw / 2;
+  CAR_LEFT_WORLD_X     = carCX - CAR_W_PX / 2;
+  CAR_RIGHT_WORLD_X    = carCX + CAR_W_PX / 2;
+  CAR_INTERIOR_LEFT_X  = CAR_LEFT_WORLD_X + CAR_INTERIOR_PAD;
+  CAR_INTERIOR_RIGHT_X = CAR_RIGHT_WORLD_X - CAR_INTERIOR_PAD;
+  // Ragdoll: original figure is ~67 design-units tall; target ~55% of cabin interior
+  RAGDOLL_SCALE = (CAR_INTERIOR_H * 0.55) / 67;
+  HEAD_R = 5 * RAGDOLL_SCALE;
+  LIMB_R = 1.8 * RAGDOLL_SCALE;
+}
+
+// All ragdoll points live in WORLD coordinates (canvas pixels).
+// y is "up": world y = 0 lies at the bottom of the shaft (floor-0 line).
+function makePassenger(centerX, floorY, variant) {
+  const s = RAGDOLL_SCALE;
+  const foot  = floorY + 2 * s;
+  const knee  = floorY + 16 * s;
+  const hipY  = floorY + 30 * s;
+  const shY   = floorY + 50 * s;
+  const headY = floorY + 62 * s;
+  // Knees biased slightly outward so they tend to bend outward under load (instead of buckling inward).
+  return {
+    variant,
+    points: {
+      head:      { x: centerX,         y: headY,      px: centerX,         py: headY },
+      shoulders: { x: centerX,         y: shY,        px: centerX,         py: shY   },
+      hips:      { x: centerX,         y: hipY,       px: centerX,         py: hipY  },
+      lhand:     { x: centerX - 8*s,   y: hipY + 4*s, px: centerX - 8*s,   py: hipY + 4*s },
+      rhand:     { x: centerX + 8*s,   y: hipY + 4*s, px: centerX + 8*s,   py: hipY + 4*s },
+      lknee:     { x: centerX - 7*s,   y: knee,       px: centerX - 7*s,   py: knee  },
+      rknee:     { x: centerX + 7*s,   y: knee,       px: centerX + 7*s,   py: knee  },
+      lfoot:     { x: centerX - 11*s,  y: foot,       px: centerX - 11*s,  py: foot  },
+      rfoot:     { x: centerX + 11*s,  y: foot,       px: centerX + 11*s,  py: foot  },
+    },
+    // [a, b, rest_length, stiffness]
+    // Primary bones — soft springs that mostly preserve segment lengths.
+    bones: [
+      ['head',      'shoulders', 12 * s, 0.20],   // very springy neck
+      ['shoulders', 'hips',      20 * s, 0.30],   // torso can compress/stretch
+      ['shoulders', 'lhand',     14 * s, 0.25],
+      ['shoulders', 'rhand',     14 * s, 0.25],
+      ['hips',      'lknee',     15 * s, 0.27],   // upper leg
+      ['hips',      'rknee',     15 * s, 0.27],
+      ['lknee',     'lfoot',     15 * s, 0.27],   // lower leg
+      ['rknee',     'rfoot',     15 * s, 0.27],
+    ],
+    // Stabilizers — very soft springs that gently restore rest pose.
+    stabilizers: [
+      ['head',  'hips',  32 * s, 0.04],   // soft spine — head sways freely
+      ['head',  'lfoot', 62 * s, 0.025],  // soft head-over-foot — body tilts easily
+      ['head',  'rfoot', 62 * s, 0.025],
+      ['hips',  'lfoot', 30 * s, 0.06],   // soft leg-straightness — knees flex
+      ['hips',  'rfoot', 30 * s, 0.06],
+      ['lfoot', 'rfoot', 28 * s, 0.08],   // feet roughly shoulder-width
+    ],
+  };
+}
+
+// ─── PARTICLES (red spray for >20g joint events) ──────────────────────────
+const PARTICLE_MAX = 800;
+const PARTICLE_GRAVITY = 380;       // px/s²; particles fall under their own gravity
+const PARTICLE_COLOR = [170, 28, 46];
+
+function emitParticles(x, y, count) {
+  if (state.particles.length >= PARTICLE_MAX) return;
+  for (let i = 0; i < count; i++) {
+    // Upward-biased spray (covers upper hemisphere with a bit of sideways)
+    const angle = Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.3;
+    const speed = 90 + Math.random() * 230;
+    state.particles.push({
+      x: x, y: y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0.4 + Math.random() * 0.5,
+      r: 1.3 + Math.random() * 1.5,
+    });
+    if (state.particles.length >= PARTICLE_MAX) return;
+  }
+}
+
+function stepParticles(dt) {
+  for (let i = state.particles.length - 1; i >= 0; i--) {
+    const p = state.particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy -= PARTICLE_GRAVITY * dt;        // gravity in y-up world
+    p.life -= dt;
+    if (p.life <= 0) state.particles.splice(i, 1);
+  }
+}
+
+function renderParticles(ctx, ch) {
+  const padBot = 24;
+  const [r, g, b] = PARTICLE_COLOR;
+  for (const p of state.particles) {
+    const alpha = Math.min(1, p.life * 2.5);
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    const screenY = (ch - padBot) - p.y;
+    ctx.beginPath();
+    ctx.arc(p.x, screenY, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function stepPassengers(dt, gWorld) {
+  // World-frame physics: just gravity. Elevator motion is communicated to passengers
+  // via the moving floor/ceiling (containment) — no pseudo-forces.
+  const gPx = gWorld * WORLD_PX_PER_M;
+  const floorY = state.position * WORLD_PX_PER_M;     // world y of the cabin floor
+  const ceilY  = floorY + CAR_H_PX;                   // world y of the cabin ceiling
+
+  // 20g threshold: tracks displacement from WALL CONTACT only (not internal bone tension),
+  // so springy joints don't falsely trigger.
+  const forceThreshSq = Math.pow(20 * gPx * dt * dt, 2);
+
+  for (const pas of state.passengers) {
+    // Verlet integration (y is "up", so gravity subtracts from y)
+    for (const k in pas.points) {
+      const p = pas.points[k];
+      const vx = (p.x - p.px) * RAGDOLL_DAMPING;
+      const vy = (p.y - p.py) * RAGDOLL_DAMPING;
+      p.px = p.x; p.py = p.y;
+      p.x += vx;
+      p.y += vy - gPx * dt * dt;
+      // Reset per-step containment displacement accumulator.
+      p.cdx = 0;
+      p.cdy = 0;
+    }
+
+    // Foot friction: when a foot is on (or near) the cabin floor, grip the surface laterally.
+    for (const k of ['lfoot', 'rfoot']) {
+      const p = pas.points[k];
+      if (p.y < floorY + LIMB_R + 2.0 * RAGDOLL_SCALE) {
+        p.px = p.x - (p.x - p.px) * 0.20;
+      }
+    }
+
+    // Constraint solving
+    for (let iter = 0; iter < RAGDOLL_ITERS; iter++) {
+      const all = pas.bones.concat(pas.stabilizers);
+      for (const [a, b, restLen, k] of all) {
+        const pa = pas.points[a];
+        const pb = pas.points[b];
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const d  = Math.sqrt(dx*dx + dy*dy) || 1e-6;
+        const diff = ((d - restLen) / d) * k;
+        pa.x += dx * diff;
+        pa.y += dy * diff;
+        pb.x -= dx * diff;
+        pb.y -= dy * diff;
+      }
+      // Containment — track displacement from wall contact for impact detection
+      for (const kk in pas.points) {
+        const p = pas.points[kk];
+        const r = (kk === 'head') ? HEAD_R : LIMB_R;
+        const bx = p.x, by = p.y;
+        if (p.x < CAR_INTERIOR_LEFT_X + r)  p.x = CAR_INTERIOR_LEFT_X + r;
+        if (p.x > CAR_INTERIOR_RIGHT_X - r) p.x = CAR_INTERIOR_RIGHT_X - r;
+        if (p.y < floorY + r)               p.y = floorY + r;
+        if (p.y > ceilY  - r)               p.y = ceilY  - r;
+        p.cdx += p.x - bx;
+        p.cdy += p.y - by;
+      }
+    }
+
+    // Detect joints that experienced >20g of WALL CONTACT force this step.
+    // (Bone tension during rest pose doesn't count — only collisions with floor/ceiling/walls.)
+    for (const k in pas.points) {
+      const p = pas.points[k];
+      if (p.cdx*p.cdx + p.cdy*p.cdy > forceThreshSq) {
+        emitParticles(p.x, p.y, 1);
+      }
+    }
+  }
+
+  // ─── PASSENGER → ELEVATOR REACTION FORCE ─────────────────────────────────
+  // Each per-point containment displacement `cdy` (pixels) represents how much
+  // the cabin floor (cdy > 0, pushing up) or ceiling (cdy < 0, pushing down)
+  // had to push that point this step. In verlet, displacement = a·dt², so the
+  // force on the point from the wall is m·cdy/dt² (in pixel units). Newton's
+  // 3rd law: the point applies the equal-and-opposite force on the wall — i.e.
+  // on the elevator. Convert from px/s² to m/s² by dividing by WORLD_PX_PER_M.
+  //
+  //   F_on_elevator (N, +up) = sum over all points of: -m_pt · cdy / (dt² · pxm)
+  //
+  // - Steady standing: cdy ≈ g·dt² per point (floor undoes gravity) → F ≈ -m_pax·g (weight, down)
+  // - Free-float (a_cabin ≥ g, downward): no contact → cdy = 0 → F = 0
+  // - Hard up-accel: cdy >> g·dt² → larger downward force on cabin
+  // - Crashing into ceiling: cdy < 0 → F > 0 (passenger pushes cabin UP, fighting decel)
+  let cdySum = 0;
+  for (const pas of state.passengers) {
+    for (const k in pas.points) cdySum += pas.points[k].cdy;
+  }
+  state.passengerContactForce = -PASSENGER_POINT_MASS * cdySum / (dt * dt * WORLD_PX_PER_M);
+}
+
+const MAX_PASSENGERS = 99;
+const PASSENGER_MASS_KG = 75;
+// Each passenger has 9 verlet points. Distribute mass uniformly across them.
+// We DON'T add passenger mass to the elevator's inertia directly — instead we
+// compute the actual reaction force the passengers exert on the cabin
+// (via floor/ceiling contact) and add it to F_net. See stepPassengers().
+const PASSENGER_POINT_MASS = PASSENGER_MASS_KG / 9;
+
+function spawnPassengers() {
+  const floorY = state.position * WORLD_PX_PER_M;
+  const N = Math.max(0, Math.min(MAX_PASSENGERS, state.passengerCount | 0));
+  state.passengers = [];
+  if (N === 0) return;
+  // Distribute evenly across cabin interior, with margin from walls so they don't spawn touching them.
+  const marginFrac = 0.18;
+  const span = 1 - 2 * marginFrac;
+  for (let i = 0; i < N; i++) {
+    const frac = N === 1 ? 0.5 : marginFrac + span * (i / (N - 1));
+    const cx = CAR_INTERIOR_LEFT_X + CAR_INTERIOR_W * frac;
+    state.passengers.push(makePassenger(cx, floorY, i % 2));
+  }
+}
+
+// ─── STATE ────────────────────────────────────────────────────────────────
+const state = {
+  // physical
+  position: 0,
+  velocity: 0,
+  setpoint: 0,
+
+  // params
+  mass:    800,
+  motorMax: 20000,
+  friction: 80,
+  gravity:  9.81,
+
+  // pid gains
+  kp: 5000,
+  ki: 800,
+  kd: 4000,
+
+  // pid internals
+  integral: 0,
+  pTerm:   0,
+  iTerm:   0,
+  dTerm:   0,
+  motorForce: 0,
+  saturated:  false,
+
+  // time / control
+  time: 0,
+  paused: false,
+
+  // elevator acceleration (used by passenger physics)
+  elevatorAccel: 0,
+
+  // passengers (ragdolls, initialized in init)
+  passengers: [],
+  passengerCount: 2,
+
+  // live reaction force from passengers on elevator (N, +up)
+  passengerContactForce: 0,
+  // smoothed display value (low-passed for readability)
+  passengerLoadDisplay: 0,
+
+  // red particle spray for high-g joint events
+  particles: [],
+
+  // settling tracker
+  setpointChangeTime: 0,
+  settledTime: null,
+  settledSince: null,
+
+  // history (ring-ish array, trimmed)
+  history: [],
+};
+
+// ─── DOM ──────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const shaft   = $("shaft");
+const chart = $("chart-main");
+const chartPanel = chart.parentElement;
+const chartMeta  = $("chart-meta");
+
+// Which view is showing in the unified chart panel: 'pos' or 'pid'.
+let chartView = 'pos';
+function setChartView(view) {
+  chartView = view;
+  chartPanel.dataset.view = view;
+  chartMeta.textContent = view === 'pos' ? '10s window · m' : '10s window · N';
+  document.querySelectorAll('.chart-tabs .tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === view);
+  });
+  // Legend visibility changes — chart canvas auto-height may shift slightly.
+  resizeCanvases();
+}
+document.querySelectorAll('.chart-tabs .tab').forEach(b => {
+  b.addEventListener('click', () => setChartView(b.dataset.view));
+});
+
+function renderChart() {
+  if (chartView === 'pos') renderPosChart();
+  else                     renderPidChart();
+}
+
+// Setup canvases for DPR
+function setupCanvas(canvas, cssW, cssH) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width  = cssW + "px";
+  canvas.style.height = cssH + "px";
+  canvas.width  = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+let shaftCtx, chartCtx;
+function resizeCanvases() {
+  // Shaft: fill the parent panel (minus its header)
+  const shaftPanel = shaft.parentElement;
+  const headerEl = shaftPanel.querySelector('h2');
+  const panelRect = shaftPanel.getBoundingClientRect();
+  const headerH = headerEl ? headerEl.getBoundingClientRect().height : 30;
+  const shaftW = panelRect.width;
+  const shaftH = Math.max(240, panelRect.height - headerH);
+  shaftCtx = setupCanvas(shaft, shaftW, shaftH);
+  configureForCanvasHeight(shaftH, shaftW);
+
+  // Chart: fill the parent panel (minus header + legend)
+  const cRect = chartPanel.getBoundingClientRect();
+  const cHeader = chartPanel.querySelector('h2');
+  const cLegend = chartPanel.querySelector('.chart-legend:not([style*="display: none"])')
+                 || chartPanel.querySelector('.chart-legend');
+  const cHeaderH = cHeader ? cHeader.getBoundingClientRect().height : 30;
+  const cLegendH = cLegend ? cLegend.getBoundingClientRect().height : 22;
+  const chartH = Math.max(60, cRect.height - cHeaderH - cLegendH);
+  chartCtx = setupCanvas(chart, cRect.width, chartH);
+}
+window.addEventListener("resize", () => { resizeCanvases(); spawnPassengers(); });
+
+// ─── EVENTS ───────────────────────────────────────────────────────────────
+// Floor buttons
+document.querySelectorAll(".floor-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    const f = parseInt(b.dataset.floor, 10);
+    setTarget(f);
+  });
+});
+function setTarget(floor) {
+  state.setpoint = floor * FLOOR_SPACING;
+  state.setpointChangeTime = state.time;
+  state.settledTime  = null;
+  state.settledSince = null;
+  document.querySelectorAll(".floor-btn").forEach(b => {
+    b.classList.toggle("active", parseInt(b.dataset.floor,10) === floor);
+  });
+}
+
+// Passenger add/remove
+function updatePaxDisplay() {
+  $("pax-count").textContent = state.passengerCount;
+  $("pax-minus").disabled = state.passengerCount <= 0;
+  $("pax-plus").disabled  = state.passengerCount >= MAX_PASSENGERS;
+}
+$("pax-minus").addEventListener("click", () => {
+  if (state.passengerCount > 0) {
+    state.passengerCount--;
+    spawnPassengers();
+    updatePaxDisplay();
+  }
+});
+$("pax-plus").addEventListener("click", () => {
+  if (state.passengerCount < MAX_PASSENGERS) {
+    state.passengerCount++;
+    spawnPassengers();
+    updatePaxDisplay();
+  }
+});
+
+// Sliders
+function bindSlider(id, valId, key, fmt) {
+  const s = $(id), v = $(valId);
+  s.addEventListener("input", () => {
+    state[key] = parseFloat(s.value);
+    v.textContent = fmt(state[key]);
+  });
+  v.textContent = fmt(state[key]);
+  s.value = state[key];
+}
+bindSlider("s-kp",  "v-kp",  "kp",      x => x.toFixed(0));
+bindSlider("s-ki",  "v-ki",  "ki",      x => x.toFixed(0));
+bindSlider("s-kd",  "v-kd",  "kd",      x => x.toFixed(0));
+bindSlider("s-mass","v-mass","mass",    x => x.toFixed(0) + " kg");
+bindSlider("s-mmax","v-mmax","motorMax",x => x.toFixed(0) + " N");
+bindSlider("s-fric","v-fric","friction",x => x.toFixed(0) + " N·s/m");
+bindSlider("s-g",   "v-g",   "gravity", x => x.toFixed(2) + " m/s²");
+
+// Pause / reset
+$("btn-pause").addEventListener("click", () => {
+  state.paused = !state.paused;
+  $("btn-pause").textContent = state.paused ? "RESUME" : "PAUSE";
+  const ind = $("status-indicator");
+  ind.textContent = state.paused ? "● PAUSED" : "● RUNNING";
+  ind.classList.toggle("paused", state.paused);
+});
+$("btn-reset").addEventListener("click", () => {
+  state.position = 0;
+  state.velocity = 0;
+  state.integral = 0;
+  state.pTerm = state.iTerm = state.dTerm = 0;
+  state.motorForce = 0;
+  state.time = 0;
+  state.setpointChangeTime = 0;
+  state.settledTime = null;
+  state.settledSince = null;
+  state.history = [];
+  state.particles = [];
+  spawnPassengers();
+  setTarget(0);
+});
+
+// Presets
+const PRESETS = {
+  "p-only":     { kp: 7000,  ki: 0,    kd: 0,    label: "P-ONLY · STEADY-STATE OFFSET" },
+  "pd":         { kp: 7000,  ki: 0,    kd: 4500, label: "PD · DAMPED BUT OFFSET" },
+  "pi":         { kp: 5000,  ki: 1200, kd: 0,    label: "PI · OSCILLATES TO TARGET" },
+  "tuned":      { kp: 6000,  ki: 800,  kd: 4500, label: "WELL TUNED" },
+  "oscillate":  { kp: 12000, ki: 1500, kd: 0,    label: "UNSTABLE · OSCILLATING" },
+  "sluggish":   { kp: 1500,  ki: 200,  kd: 1000, label: "SLUGGISH" },
+  "aggressive": { kp: 15000, ki: 1800, kd: 7000, label: "AGGRESSIVE FAST RESPONSE" },
+  "heavy":      { kp: 9000,  ki: 1200, kd: 6000, label: "TUNED FOR 2000 kg LOAD",
+                  mass: 2000 },
+};
+document.querySelectorAll(".preset-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    const p = PRESETS[b.dataset.preset];
+    if (!p) return;
+    state.kp = p.kp; state.ki = p.ki; state.kd = p.kd;
+    state.integral = 0;
+    if (p.mass) state.mass = p.mass;
+    syncSliders();
+  });
+});
+function syncSliders() {
+  $("s-kp").value = state.kp;   $("v-kp").textContent  = state.kp.toFixed(0);
+  $("s-ki").value = state.ki;   $("v-ki").textContent  = state.ki.toFixed(0);
+  $("s-kd").value = state.kd;   $("v-kd").textContent  = state.kd.toFixed(0);
+  $("s-mass").value = state.mass; $("v-mass").textContent = state.mass.toFixed(0)+" kg";
+  $("s-mmax").value = state.motorMax; $("v-mmax").textContent = state.motorMax.toFixed(0)+" N";
+  $("s-fric").value = state.friction; $("v-fric").textContent = state.friction.toFixed(0)+" N·s/m";
+}
+
+// ─── PHYSICS / PID ────────────────────────────────────────────────────────
+function physicsStep(dt) {
+  const error = state.setpoint - state.position;
+
+  // P
+  state.pTerm = state.kp * error;
+
+  // I (tentative; apply anti-windup clamping below)
+  let candidateIntegral = state.integral + error * dt;
+  let candidateITerm    = state.ki * candidateIntegral;
+
+  // D — derivative on MEASUREMENT (uses -velocity), no derivative kick
+  state.dTerm = -state.kd * state.velocity;
+
+  // Combine
+  let raw = state.pTerm + candidateITerm + state.dTerm;
+  const lim = state.motorMax;
+  let clipped = Math.max(-lim, Math.min(lim, raw));
+  state.saturated = (raw !== clipped);
+
+  // Anti-windup: only integrate when not saturated in the same direction as error
+  const pushing = (raw > 0 && error > 0) || (raw < 0 && error < 0);
+  if (!(state.saturated && pushing)) {
+    state.integral = candidateIntegral;
+    state.iTerm    = candidateITerm;
+  } else {
+    state.iTerm = state.ki * state.integral; // unchanged
+  }
+  // Recompute final motor force with possibly-old integral
+  raw = state.pTerm + state.iTerm + state.dTerm;
+  state.motorForce = Math.max(-lim, Math.min(lim, raw));
+  state.saturated  = (raw !== state.motorForce);
+
+  // Dynamics — passengers feed back as a contact force from floor/ceiling
+  // (computed in stepPassengers, one physics step delayed — negligible at 200Hz).
+  // The mass slider is the empty cabin's inertia only; passenger weight enters via Fpax.
+  const Mcab = state.mass;
+  const Fg   = -Mcab * state.gravity;
+  const Ff   = -state.friction * state.velocity;
+  const Fpax = state.passengerContactForce || 0;
+  const Fnet = state.motorForce + Fg + Ff + Fpax;
+  const a    = Fnet / Mcab;
+  state.elevatorAccel = a;
+  state.velocity += a * dt;
+  state.position += state.velocity * dt;
+
+  // Hard limits — bottom & top of shaft
+  if (state.position < 0) { state.position = 0; if (state.velocity < 0) state.velocity = 0; }
+  const ceil = MAX_HEIGHT + 0.5;
+  if (state.position > ceil) { state.position = ceil; if (state.velocity > 0) state.velocity = 0; }
+
+  // Step ragdoll passengers in world frame (they feel only real gravity;
+  // the moving cabin floor/ceiling pushes them through containment).
+  stepPassengers(dt, state.gravity);
+  stepParticles(dt);
+
+  state.time += dt;
+
+  // Settling detection
+  if (state.settledTime === null) {
+    const absE = Math.abs(error);
+    const absV = Math.abs(state.velocity);
+    if (absE < SETTLE_TOL && absV < SETTLE_VEL) {
+      if (state.settledSince === null) state.settledSince = state.time;
+      if (state.time - state.settledSince >= SETTLE_TIME) {
+        state.settledTime = Math.max(0, state.settledSince - state.setpointChangeTime);
+      }
+    } else {
+      state.settledSince = null;
+    }
+  }
+}
+
+// History sampling rate (slower than physics)
+let histAccum = 0;
+const HIST_DT = 1/60;
+function recordHistory(dt) {
+  histAccum += dt;
+  while (histAccum >= HIST_DT) {
+    state.history.push({
+      t: state.time,
+      pos: state.position,
+      set: state.setpoint,
+      p: state.pTerm,
+      i: state.iTerm,
+      d: state.dTerm,
+      m: state.motorForce,
+      sat: state.saturated,
+    });
+    histAccum -= HIST_DT;
+  }
+  // Trim
+  const cut = state.time - HISTORY_SEC - 0.5;
+  while (state.history.length && state.history[0].t < cut) state.history.shift();
+}
+
+// ─── RENDER: PASSENGERS ───────────────────────────────────────────────────
+function renderPassengers(ctx, ch) {
+  // World x is already canvas x. World y → screen y: screen = (ch - padBot) - world_y
+  const padBot = 24;
+  const wsy = wy => (ch - padBot) - wy;
+
+  for (const pas of state.passengers) {
+    const pts = pas.points;
+    const color = pas.variant === 0 ? "#1d2538" : "#4731a0";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = "round";
+
+    // Limbs + spine + neck (single path for efficiency)
+    ctx.beginPath();
+    ctx.moveTo(pts.head.x,      wsy(pts.head.y));      ctx.lineTo(pts.shoulders.x, wsy(pts.shoulders.y));
+    ctx.moveTo(pts.shoulders.x, wsy(pts.shoulders.y)); ctx.lineTo(pts.hips.x,      wsy(pts.hips.y));
+    ctx.moveTo(pts.shoulders.x, wsy(pts.shoulders.y)); ctx.lineTo(pts.lhand.x,     wsy(pts.lhand.y));
+    ctx.moveTo(pts.shoulders.x, wsy(pts.shoulders.y)); ctx.lineTo(pts.rhand.x,     wsy(pts.rhand.y));
+    // Legs bend at the knees
+    ctx.moveTo(pts.hips.x,      wsy(pts.hips.y));      ctx.lineTo(pts.lknee.x,     wsy(pts.lknee.y));
+    ctx.lineTo(pts.lfoot.x,     wsy(pts.lfoot.y));
+    ctx.moveTo(pts.hips.x,      wsy(pts.hips.y));      ctx.lineTo(pts.rknee.x,     wsy(pts.rknee.y));
+    ctx.lineTo(pts.rfoot.x,     wsy(pts.rfoot.y));
+    ctx.stroke();
+
+    // Head
+    ctx.beginPath();
+    ctx.arc(pts.head.x, wsy(pts.head.y), HEAD_R, 0, Math.PI*2);
+    if (pas.variant === 0) {
+      ctx.fillStyle = color;
+      ctx.fill();
+    } else {
+      ctx.fillStyle = "#fdf9ea";
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+  }
+}
+
+// ─── RENDER: ELEVATOR SHAFT ───────────────────────────────────────────────
+function renderShaft() {
+  const ctx = shaftCtx;
+  const cw = shaft.clientWidth;
+  const ch = shaft.clientHeight;
+  ctx.clearRect(0, 0, cw, ch);
+
+  // Map meters → canvas y. Reserve ~3m of headroom above top floor so the taller car fits at floor 4.
+  const padTop = 24, padBot = 24;
+  const usableH = ch - padTop - padBot;
+  const Y_RANGE = MAX_HEIGHT + 3.0;   // meters mapped over usableH
+  const yFor = m => padTop + usableH * (1 - m / Y_RANGE);
+
+  // Shaft visualization is fixed width, centered in the (possibly wide) canvas
+  const targetShaftW = Math.min(420, cw - 100);
+  const shaftLeft = Math.round((cw - targetShaftW) / 2);
+  const shaftRight = shaftLeft + targetShaftW;
+  const shaftW = targetShaftW;
+
+  // Subtle vertical grid in shaft
+  ctx.strokeStyle = "#ede4c2";
+  ctx.lineWidth = 1;
+  for (let x = shaftLeft; x <= shaftRight; x += shaftW / 6) {
+    ctx.beginPath(); ctx.moveTo(x + 0.5, padTop); ctx.lineTo(x + 0.5, ch - padBot); ctx.stroke();
+  }
+
+  // Shaft frame
+  ctx.strokeStyle = "#a8a07c";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(shaftLeft + 0.5, padTop + 0.5, shaftW - 1, usableH - 1);
+
+  // Motor housing at top
+  ctx.fillStyle = "#e0d4a8";
+  ctx.fillRect(shaftLeft - 6, padTop - 14, shaftW + 12, 12);
+  ctx.strokeStyle = "#7c7560";
+  ctx.strokeRect(shaftLeft - 6 + 0.5, padTop - 14 + 0.5, shaftW + 12 - 1, 12 - 1);
+  ctx.fillStyle = "#5a5246";
+  ctx.font = "8px 'JetBrains Mono', monospace";
+  ctx.fillText("MOTOR", shaftLeft - 2, padTop - 5);
+
+  // Floors
+  for (let f = 0; f < NUM_FLOORS; f++) {
+    const y = yFor(f * FLOOR_SPACING);
+    ctx.strokeStyle = "#a8a07c";
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(shaftLeft, y); ctx.lineTo(shaftRight, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = "#8a8270";
+    ctx.font = "9px 'JetBrains Mono', monospace";
+    ctx.textAlign = "right";
+    ctx.fillText(`F${f}`, shaftLeft - 8, y + 3);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#7c7560";
+    ctx.fillText(`${(f * FLOOR_SPACING).toFixed(0)}m`, shaftRight + 8, y + 3);
+  }
+
+  // Setpoint indicator
+  const ySet = yFor(state.setpoint);
+  ctx.strokeStyle = "#0e5a85";
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(shaftLeft, ySet); ctx.lineTo(shaftRight, ySet); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#0e5a85";
+  ctx.beginPath();
+  ctx.moveTo(shaftRight + 2, ySet);
+  ctx.lineTo(shaftRight + 8, ySet - 4);
+  ctx.lineTo(shaftRight + 8, ySet + 4);
+  ctx.closePath();
+  ctx.fill();
+
+  // Elevator car — floor aligned with current position
+  const carCX = (shaftLeft + shaftRight) / 2;
+  const carBottom = yFor(state.position);     // car floor y
+  const carTop = carBottom - CAR_H_PX;        // car top y
+  const carLeft = carCX - CAR_W_PX/2;
+
+  // Cable from motor down to car
+  ctx.strokeStyle = "#7c7560";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(carCX, padTop - 2);
+  ctx.lineTo(carCX, carTop);
+  ctx.stroke();
+  // Top hat (cable attachment)
+  ctx.fillStyle = "#7c7560";
+  ctx.fillRect(carCX - 5, carTop - 3, 10, 3);
+
+  // Car body
+  ctx.fillStyle = "#ebdfb2";
+  ctx.fillRect(carLeft, carTop, CAR_W_PX, CAR_H_PX);
+  ctx.strokeStyle = state.saturated ? "#a01e2e" : "#6e6852";
+  ctx.lineWidth = state.saturated ? 1.5 : 1;
+  ctx.strokeRect(carLeft + 0.5, carTop + 0.5, CAR_W_PX - 1, CAR_H_PX - 1);
+
+  // Car floor line (passengers stand on this)
+  ctx.strokeStyle = "#7c7560";
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(carLeft + 2, carBottom - 0.5);
+  ctx.lineTo(carLeft + CAR_W_PX - 2, carBottom - 0.5);
+  ctx.stroke();
+
+  // Passengers (in world coords — drawn directly over the car body)
+  renderPassengers(ctx, ch);
+
+  // Red particle spray for >20g joint events (drawn last so they sit on top)
+  renderParticles(ctx, ch);
+
+  // Force arrows alongside car (vertical center of car)
+  const arrY = (carTop + carBottom) / 2;
+  const arrowX = shaftRight + 22;
+  const arrowMaxLen = 60;
+  const mFrac = state.motorForce / state.motorMax;
+  const mLen = mFrac * arrowMaxLen;
+  ctx.strokeStyle = state.motorForce >= 0 ? "#a55c0a" : "#a01e2e";
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(arrowX, arrY);
+  ctx.lineTo(arrowX, arrY - mLen);
+  ctx.stroke();
+  // arrowhead
+  const dir = mLen >= 0 ? -1 : 1;
+  const tipY = arrY - mLen;
+  ctx.beginPath();
+  ctx.moveTo(arrowX, tipY);
+  ctx.lineTo(arrowX - 3, tipY - dir * 5);
+  ctx.lineTo(arrowX + 3, tipY - dir * 5);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#5a5246";
+  ctx.font = "8px 'JetBrains Mono', monospace";
+  ctx.fillText("F_mot", arrowX - 8, ch - padBot - 4);
+
+  // SATURATED indicator
+  if (state.saturated) {
+    ctx.fillStyle = "#a01e2e";
+    ctx.font = "bold 9px 'JetBrains Mono', monospace";
+    ctx.fillText("SAT", 8, 14);
+  }
+}
+
+// ─── RENDER: CHART HELPERS ────────────────────────────────────────────────
+function drawGrid(ctx, w, h, padL, padR, padT, padB, yMin, yMax, gridYCount, tWindow, label) {
+  // background
+  ctx.fillStyle = "#fdf9ea";
+  ctx.fillRect(0, 0, w, h);
+
+  // grid lines
+  ctx.strokeStyle = "#e6dcb8";
+  ctx.lineWidth = 1;
+  // horizontal
+  for (let i = 0; i <= gridYCount; i++) {
+    const y = padT + (h - padT - padB) * i / gridYCount;
+    ctx.beginPath(); ctx.moveTo(padL, y + 0.5); ctx.lineTo(w - padR, y + 0.5); ctx.stroke();
+  }
+  // vertical (1-second marks)
+  for (let t = 0; t <= tWindow; t++) {
+    const x = padL + (w - padL - padR) * t / tWindow;
+    ctx.beginPath(); ctx.moveTo(x + 0.5, padT); ctx.lineTo(x + 0.5, h - padB); ctx.stroke();
+  }
+
+  // Y-axis labels
+  ctx.fillStyle = "#8a8270";
+  ctx.font = "9px 'JetBrains Mono', monospace";
+  ctx.textAlign = "right";
+  for (let i = 0; i <= gridYCount; i++) {
+    const v = yMax - (yMax - yMin) * i / gridYCount;
+    const y = padT + (h - padT - padB) * i / gridYCount;
+    ctx.fillText(formatTick(v), padL - 4, y + 3);
+  }
+  // X-axis labels (seconds back from "now")
+  ctx.textAlign = "center";
+  for (let t = 0; t <= tWindow; t++) {
+    const x = padL + (w - padL - padR) * t / tWindow;
+    const label = (t === tWindow ? "now" : `-${tWindow - t}s`);
+    ctx.fillText(label, x, h - padB + 11);
+  }
+  // 0-line accent if range crosses zero
+  if (yMin < 0 && yMax > 0) {
+    const y = padT + (h - padT - padB) * (yMax / (yMax - yMin));
+    ctx.strokeStyle = "#a8a07c";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y + 0.5); ctx.lineTo(w - padR, y + 0.5); ctx.stroke();
+  }
+}
+
+function formatTick(v) {
+  if (Math.abs(v) >= 10000) return (v/1000).toFixed(0) + "k";
+  if (Math.abs(v) >= 1000)  return (v/1000).toFixed(1) + "k";
+  if (Math.abs(v) >= 100)   return v.toFixed(0);
+  if (Math.abs(v) >= 10)    return v.toFixed(1);
+  return v.toFixed(2);
+}
+
+function plotSeries(ctx, hist, getter, color, dashed, padL, padR, padT, padB, w, h, yMin, yMax, tEnd, tWindow) {
+  if (hist.length < 2) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  if (dashed) ctx.setLineDash([4, 3]); else ctx.setLineDash([]);
+  ctx.beginPath();
+  let started = false;
+  for (let k = 0; k < hist.length; k++) {
+    const s = hist[k];
+    const tx = padL + (w - padL - padR) * ((s.t - (tEnd - tWindow)) / tWindow);
+    const v  = getter(s);
+    const ty = padT + (h - padT - padB) * (1 - (v - yMin) / (yMax - yMin));
+    if (!started) { ctx.moveTo(tx, ty); started = true; }
+    else ctx.lineTo(tx, ty);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// ─── RENDER: POSITION CHART ───────────────────────────────────────────────
+// Snap a [lo, hi] range to nice round numbers based on the span's order of magnitude
+function snapRange(lo, hi) {
+  const span = hi - lo;
+  if (span < 1e-9) return [lo - 1, hi + 1];
+  const exp = Math.floor(Math.log10(span));
+  const step = Math.pow(10, exp) / 2;
+  return [Math.floor(lo / step) * step, Math.ceil(hi / step) * step];
+}
+
+function renderPosChart() {
+  const ctx = chartCtx;
+  const w = chart.clientWidth, h = chart.clientHeight;
+  const padL = 36, padR = 18, padT = 12, padB = 20;
+
+  // Auto-scale Y to data floor/ceiling (position + setpoint over history window)
+  let dataLo = Infinity, dataHi = -Infinity;
+  for (const s of state.history) {
+    if (s.pos < dataLo) dataLo = s.pos;
+    if (s.set < dataLo) dataLo = s.set;
+    if (s.pos > dataHi) dataHi = s.pos;
+    if (s.set > dataHi) dataHi = s.set;
+  }
+  if (!isFinite(dataLo)) { dataLo = 0; dataHi = 1; }
+  const pad = Math.max(0.3, (dataHi - dataLo) * 0.10);
+  const [yMin, yMax] = snapRange(dataLo - pad, dataHi + pad);
+  const tEnd = Math.max(state.time, HISTORY_SEC);
+  drawGrid(ctx, w, h, padL, padR, padT, padB, yMin, yMax, 5, HISTORY_SEC, "m");
+
+  // Floor reference lines (only those inside the current view)
+  ctx.strokeStyle = "#ddd2a6";
+  ctx.setLineDash([1, 3]);
+  for (let f = 0; f < NUM_FLOORS; f++) {
+    const fy = f * FLOOR_SPACING;
+    if (fy < yMin || fy > yMax) continue;
+    const y = padT + (h - padT - padB) * (1 - (fy - yMin) / (yMax - yMin));
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Setpoint (dashed cyan)
+  plotSeries(ctx, state.history, s => s.set, "#0e5a85", true,
+             padL, padR, padT, padB, w, h, yMin, yMax, tEnd, HISTORY_SEC);
+  // Position (solid green)
+  plotSeries(ctx, state.history, s => s.pos, "#1f7a14", false,
+             padL, padR, padT, padB, w, h, yMin, yMax, tEnd, HISTORY_SEC);
+
+  // Current readout dot
+  if (state.history.length) {
+    const s = state.history[state.history.length - 1];
+    const tx = padL + (w - padL - padR);
+    const ty = padT + (h - padT - padB) * (1 - (s.pos - yMin) / (yMax - yMin));
+    ctx.fillStyle = "#1f7a14";
+    ctx.beginPath(); ctx.arc(tx - 2, ty, 2.5, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+// ─── RENDER: CONTROL CHART ────────────────────────────────────────────────
+function renderPidChart() {
+  const ctx = chartCtx;
+  const w = chart.clientWidth, h = chart.clientHeight;
+  const padL = 44, padR = 18, padT = 12, padB = 20;
+
+  // Auto-scale Y to data floor/ceiling across all PID terms + motor output
+  let dataLo = Infinity, dataHi = -Infinity;
+  for (const s of state.history) {
+    const lo = Math.min(s.p, s.i, s.d, s.m);
+    const hi = Math.max(s.p, s.i, s.d, s.m);
+    if (lo < dataLo) dataLo = lo;
+    if (hi > dataHi) dataHi = hi;
+  }
+  if (!isFinite(dataLo)) { dataLo = -1000; dataHi = 1000; }
+  const pad = Math.max(100, (dataHi - dataLo) * 0.08);
+  const [yMin, yMax] = snapRange(dataLo - pad, dataHi + pad);
+  const tEnd = Math.max(state.time, HISTORY_SEC);
+
+  drawGrid(ctx, w, h, padL, padR, padT, padB, yMin, yMax, 6, HISTORY_SEC, "N");
+
+  // Motor saturation lines (drawn only when within current view)
+  const inRange = v => v >= yMin && v <= yMax;
+  ctx.strokeStyle = "rgba(160,30,46,0.35)";
+  ctx.setLineDash([2, 4]);
+  if (inRange(state.motorMax)) {
+    const y = padT + (h - padT - padB) * (1 - (state.motorMax - yMin) / (yMax - yMin));
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+  }
+  if (inRange(-state.motorMax)) {
+    const y = padT + (h - padT - padB) * (1 - (-state.motorMax - yMin) / (yMax - yMin));
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  plotSeries(ctx, state.history, s => s.p, "#a55c0a", false, padL, padR, padT, padB, w, h, yMin, yMax, tEnd, HISTORY_SEC);
+  plotSeries(ctx, state.history, s => s.i, "#98135e", false, padL, padR, padT, padB, w, h, yMin, yMax, tEnd, HISTORY_SEC);
+  plotSeries(ctx, state.history, s => s.d, "#4731a0", false, padL, padR, padT, padB, w, h, yMin, yMax, tEnd, HISTORY_SEC);
+  plotSeries(ctx, state.history, s => s.m, "#1d2538", false, padL, padR, padT, padB, w, h, yMin, yMax, tEnd, HISTORY_SEC);
+}
+
+function niceCeil(x) {
+  if (x <= 0) return 1000;
+  const exp = Math.floor(Math.log10(x));
+  const base = Math.pow(10, exp);
+  const norm = x / base;
+  let nice;
+  if (norm <= 1) nice = 1;
+  else if (norm <= 2) nice = 2;
+  else if (norm <= 5) nice = 5;
+  else nice = 10;
+  return nice * base;
+}
+
+// ─── RENDER: TEXT READOUTS ────────────────────────────────────────────────
+function renderReadouts() {
+  $("r-position").textContent = state.position.toFixed(2) + " m";
+  $("r-floor").textContent    = (state.position / FLOOR_SPACING).toFixed(2);
+  $("r-target").textContent   = state.setpoint.toFixed(2) + " m";
+  $("r-velocity").textContent = state.velocity.toFixed(2) + " m/s";
+  const err = state.setpoint - state.position;
+  const errEl = $("r-error");
+  errEl.textContent = (err >= 0 ? "+" : "") + err.toFixed(3) + " m";
+  errEl.classList.toggle("warn", Math.abs(err) > 0.2);
+  const motorEl = $("r-motor");
+  motorEl.textContent = (state.motorForce >= 0 ? "+" : "") + state.motorForce.toFixed(0) + " N" +
+                        (state.saturated ? "  SAT" : "");
+  motorEl.classList.toggle("warn", state.saturated);
+
+  // LOAD = -F_pax: positive when passengers weigh the elevator down (normal),
+  // negative when they're pinned against the ceiling and pulling it up.
+  // Exponentially smooth for display so the number doesn't flicker.
+  const liveLoad = -state.passengerContactForce;
+  state.passengerLoadDisplay += (liveLoad - state.passengerLoadDisplay) * 0.10;
+  const loadEl = $("r-load");
+  const displayN = state.passengerLoadDisplay;
+  loadEl.textContent = (displayN >= 0 ? "+" : "") + displayN.toFixed(0) + " N";
+  loadEl.classList.toggle("warn", Math.abs(displayN) > Math.abs(state.passengerCount * PASSENGER_MASS_KG * state.gravity) * 1.8);
+
+  const settledEl = $("r-settled");
+  if (state.settledTime !== null) {
+    settledEl.textContent = state.settledTime.toFixed(2) + " s";
+    settledEl.classList.remove("warn");
+  } else {
+    settledEl.textContent = "settling…";
+    settledEl.classList.add("warn");
+  }
+
+  $("meta-clock").textContent = "t=" + state.time.toFixed(2) + "s";
+
+  // PID bars (centered, scaled to motorMax)
+  const lim = state.motorMax;
+  setBar("b-p", state.pTerm, lim);
+  setBar("b-i", state.iTerm, lim);
+  setBar("b-d", state.dTerm, lim);
+  setBar("b-m", state.motorForce, lim);
+
+  $("t-p").textContent = formatN(state.pTerm);
+  $("t-i").textContent = formatN(state.iTerm);
+  $("t-d").textContent = formatN(state.dTerm);
+  $("t-m").textContent = formatN(state.motorForce) + (state.saturated ? " ◤SAT" : "");
+}
+function formatN(v) {
+  const s = v >= 0 ? "+" : "";
+  if (Math.abs(v) >= 1000) return s + (v/1000).toFixed(2) + " kN";
+  return s + v.toFixed(0) + " N";
+}
+function setBar(id, val, lim) {
+  const el = $(id);
+  const frac = Math.max(-1, Math.min(1, val / lim));
+  if (frac >= 0) {
+    el.style.left  = "50%";
+    el.style.right = "auto";
+    el.style.width = (frac * 50) + "%";
+  } else {
+    el.style.left  = "auto";
+    el.style.right = "50%";
+    el.style.width = (-frac * 50) + "%";
+  }
+}
+
+// ─── MAIN LOOP ────────────────────────────────────────────────────────────
+let lastTime = performance.now();
+let accumulator = 0;
+
+function loop(now) {
+  const dtRaw = (now - lastTime) / 1000;
+  lastTime = now;
+  if (!state.paused) {
+    accumulator += Math.min(dtRaw, 0.1);
+    while (accumulator >= PHYS_DT) {
+      physicsStep(PHYS_DT);
+      accumulator -= PHYS_DT;
+    }
+    recordHistory(dtRaw);
+  }
+  renderShaft();
+  renderShaft();
+  renderChart();
+  renderReadouts();
+  requestAnimationFrame(loop);
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────
+function init() {
+  resizeCanvases();
+  // initial active button
+  document.querySelector('.floor-btn[data-floor="0"]').classList.add("active");
+  // seed a bit of history so chart starts non-empty
+  for (let k = 0; k < 5; k++) state.history.push({t: -0.05*k, pos: 0, set: 0, p: 0, i: 0, d: 0, m: 0, sat: false});
+  spawnPassengers();
+  updatePaxDisplay();
+  requestAnimationFrame(loop);
+}
+init();
+</script>
+</body>
+</html>
